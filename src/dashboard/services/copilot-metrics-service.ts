@@ -143,10 +143,11 @@ async function fetchDayRange(
 
   // Generate the list of days
   const days: string[] = [];
-  const current = new Date(start);
-  while (current <= end) {
-    days.push(format(current, "yyyy-MM-dd"));
-    current.setDate(current.getDate() + 1);
+  const currentTime = new Date(start).getTime();
+  const endTime = end.getTime();
+  const msPerDay = 86400000;
+  for (let t = currentTime; t <= endTime; t += msPerDay) {
+    days.push(format(new Date(t), "yyyy-MM-dd"));
   }
 
   // Cap at a reasonable number to avoid excessive API calls
