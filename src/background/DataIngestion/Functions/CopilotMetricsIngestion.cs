@@ -34,16 +34,11 @@ public class CopilotMetricsIngestion
 
         var metrics = new List<Metrics>();
 
+        // The new Copilot metrics API (v2) returns enterprise/org-level aggregate data.
+        // Team-specific metrics endpoints are no longer available.
+        // We fetch the overall metrics and store them. The dashboard applies team
+        // filtering at the query level using seat assignment data when needed.
         metrics.AddRange(await ExtractMetrics());
-       
-        var teams = await _seatsClient.GetAllTeamsAsync();
-        if (teams.Any())
-        {
-            foreach (var team in teams)
-            {
-                metrics.AddRange(await ExtractMetrics(team));
-            }
-        }
 
         if (myTimer.ScheduleStatus is not null)
         {

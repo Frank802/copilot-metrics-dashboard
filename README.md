@@ -15,7 +15,9 @@
 
 # Introduction
 
-The GitHub Copilot Metrics Dashboard is a solution accelerator designed to visualize metrics from GitHub Copilot using the [GitHub Copilot Metrics API](https://docs.github.com/en/enterprise-cloud@latest/rest/copilot/copilot-metrics?apiVersion=2022-11-28) and [GitHub Copilot User Management API](https://docs.github.com/en/enterprise-cloud@latest/rest/copilot/copilot-user-management?apiVersion=2022-11-28).
+The GitHub Copilot Metrics Dashboard is a solution accelerator designed to visualize metrics from GitHub Copilot using the [GitHub Copilot Usage Metrics API](https://docs.github.com/en/enterprise-cloud@latest/rest/copilot/copilot-usage-metrics?apiVersion=2022-11-28) and [GitHub Copilot User Management API](https://docs.github.com/en/enterprise-cloud@latest/rest/copilot/copilot-user-management?apiVersion=2022-11-28).
+
+> **Note:** This dashboard has been updated to use the new Copilot Usage Metrics API (v2, API version `2026-03-10`) which replaces the legacy `/copilot/metrics` endpoints. The new API uses a two-step report-based approach: first fetching download links, then downloading NDJSON report files. See the [GitHub changelog](https://github.blog/changelog/2026-01-29-closing-down-notice-of-legacy-copilot-metrics-apis/) for details on the deprecation timeline.
 
 ## Dashboard
 
