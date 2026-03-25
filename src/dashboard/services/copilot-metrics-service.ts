@@ -7,6 +7,7 @@ import { cosmosClient, cosmosConfiguration } from "./cosmos-db-service";
 import { ensureGitHubEnvConfig } from "./env-service";
 import { stringIsNullOrEmpty, applyTimeFrameLabel } from "../utils/helpers";
 import { sampleData } from "./sample-data";
+import { fetchMetricsReport, convertReportRecordsToLegacy } from "./metrics-api-adapter";
 
 export interface IFilter {
   startDate?: Date;
@@ -40,48 +41,38 @@ export const getCopilotMetrics = async (
           filter.organization = organization;
         }
         break;
-    }    if (isCosmosConfig) {
+    }
+
+    if (isCosmosConfig) {
       return getCopilotMetricsFromDatabase(filter);
     }
-    
-    // If teams are specified, use the teams-specific API function
-    if (filter.team && filter.team.length > 0) {
-      return getCopilotTeamsMetricsFromApi(filter);
-    }
-    
+
     return getCopilotMetricsFromApi(filter);
   } catch (e) {
     return unknownResponseError(e);
   }
 };
 
-const fetchCopilotMetrics = async (
-  url: string,
-  token: string,
-  version: string,
-  entityName: string
-): Promise<ServerActionResponse<CopilotUsageOutput[]>> => {
-  const response = await fetch(url, {
-    cache: "no-store",
-    headers: {
-      Accept: `application/vnd.github+json`,
-      Authorization: `Bearer ${token}`,
-      "X-GitHub-Api-Version": version,
-    },
-  });
+/**
+ * Constructs the GitHub API base URL from environment or default.
+ */
+function getApiBaseUrl(): string {
+  return process.env.GITHUB_API_BASEURL || "https://api.github.com";
+}
 
-  if (!response.ok) {
-    return formatResponseError(entityName, response);
-  }
-
-  const data = await response.json();
-  const dataWithTimeFrame = applyTimeFrameLabel(data);
-  return {
-    status: "OK",
-    response: dataWithTimeFrame,
-  };
-};
-
+/**
+ * Fetches metrics from the new Copilot Usage Metrics API (v2).
+ *
+ * The new API works in two steps:
+ *   1. Call a reports endpoint → get download_links
+ *   2. Download the NDJSON files → parse records → convert to legacy format
+ *
+ * For date ranges within the last 28 days, uses the 28-day/latest endpoint.
+ * For specific dates or wider ranges, iterates 1-day endpoints in parallel.
+ *
+ * Note: The new API does not support team-specific metrics endpoints.
+ * Team filtering is only available via the Cosmos DB path.
+ */
 export const getCopilotMetricsFromApi = async (
   filter: IFilter
 ): Promise<ServerActionResponse<CopilotUsageOutput[]>> => {
@@ -90,121 +81,116 @@ export const getCopilotMetricsFromApi = async (
   if (env.status !== "OK") {
     return env;
   }
-  
-  if (filter.team && filter.team.length > 0) {
-    return getCopilotTeamsMetricsFromApi(filter);
-  }
 
   const { token, version } = env.response;
+  const baseUrl = getApiBaseUrl();
 
   try {
-    const queryParams = new URLSearchParams();
+    const entityName = filter.enterprise || filter.organization;
 
-    if (filter.startDate) {
-      queryParams.append("since", format(filter.startDate, "yyyy-MM-dd"));
+    // Determine whether to use the 28-day or day-by-day approach
+    const needsSpecificDays = filter.startDate && filter.endDate;
+
+    if (needsSpecificDays) {
+      // For specific date ranges, fetch each day individually in parallel
+      return fetchDayRange(filter, token, version, baseUrl);
     }
-    if (filter.endDate) {
-      queryParams.append("until", format(filter.endDate, "yyyy-MM-dd"));
-    }
 
-    const queryString = queryParams.toString()
-      ? `?${queryParams.toString()}`
-      : "";
-
+    // Default: use the 28-day latest report
+    let reportUrl: string;
     if (filter.enterprise) {
-      const url = `https://api.github.com/enterprises/${filter.enterprise}/copilot/metrics${queryString}`;
-      return fetchCopilotMetrics(url, token, version, filter.enterprise);
+      reportUrl = `${baseUrl}/enterprises/${filter.enterprise}/copilot/metrics/reports/enterprise-28-day/latest`;
     } else {
-      const url = `https://api.github.com/orgs/${filter.organization}/copilot/metrics${queryString}`;
-      return fetchCopilotMetrics(url, token, version, filter.organization);
+      reportUrl = `${baseUrl}/orgs/${filter.organization}/copilot/metrics/reports/organization-28-day/latest`;
     }
+
+    const result = await fetchMetricsReport(
+      reportUrl,
+      token,
+      version,
+      entityName
+    );
+
+    if (result.status !== "OK") {
+      return result;
+    }
+
+    const metrics = convertReportRecordsToLegacy(result.response);
+    const dataWithTimeFrame = applyTimeFrameLabel(metrics);
+
+    return {
+      status: "OK",
+      response: dataWithTimeFrame,
+    };
   } catch (e) {
     return unknownResponseError(e);
   }
 };
 
 /**
- * Fetches Copilot metrics for specific teams from the GitHub API
- * @param filter - Filter containing team names and date range
- * @returns Promise with combined metrics for all specified teams
+ * Fetches metrics for a specific date range by calling the 1-day endpoint
+ * for each day in parallel with bounded concurrency.
  */
-export const getCopilotTeamsMetricsFromApi = async (
-  filter: IFilter
-): Promise<ServerActionResponse<CopilotUsageOutput[]>> => {
-  const env = ensureGitHubEnvConfig();
+async function fetchDayRange(
+  filter: IFilter,
+  token: string,
+  version: string,
+  baseUrl: string
+): Promise<ServerActionResponse<CopilotUsageOutput[]>> {
+  const entityName = filter.enterprise || filter.organization;
+  const start = filter.startDate!;
+  const end = filter.endDate!;
 
-  if (env.status !== "OK") {
-    return env;
+  // Generate the list of days
+  const days: string[] = [];
+  const current = new Date(start);
+  while (current <= end) {
+    days.push(format(current, "yyyy-MM-dd"));
+    current.setDate(current.getDate() + 1);
   }
 
-  const { token, version } = env.response;
-  try {
-    // If no teams specified, return empty array
-    if (!filter.team || filter.team.length === 0) {
-      return {
-        status: "OK",
-        response: [],
-      };
-    }
+  // Cap at a reasonable number to avoid excessive API calls
+  const maxDays = 90;
+  const daysToFetch = days.slice(0, maxDays);
 
-    const queryParams = new URLSearchParams();
+  // Fetch each day in parallel batches
+  const batchSize = 10;
+  const allMetrics: CopilotMetrics[] = [];
 
-    if (filter.startDate) {
-      queryParams.append("since", format(filter.startDate, "yyyy-MM-dd"));
-    }
-    if (filter.endDate) {
-      queryParams.append("until", format(filter.endDate, "yyyy-MM-dd"));
-    }
-
-    const queryString = queryParams.toString()
-      ? `?${queryParams.toString()}`
-      : "";
-
-    // Fetch metrics for each team and combine results
-    const teamMetricsPromises = filter.team.map(async (teamSlug) => {
-      let url: string;
-      let entityName: string;
-
+  for (let i = 0; i < daysToFetch.length; i += batchSize) {
+    const batch = daysToFetch.slice(i, i + batchSize);
+    const batchPromises = batch.map(async (day) => {
+      let reportUrl: string;
       if (filter.enterprise) {
-        // For enterprise-level team metrics
-        url = `https://api.github.com/enterprises/${filter.enterprise}/team/${teamSlug}/copilot/metrics${queryString}`;
-        entityName = `${filter.enterprise}/team/${teamSlug}`;
+        reportUrl = `${baseUrl}/enterprises/${filter.enterprise}/copilot/metrics/reports/enterprise-1-day?day=${day}`;
       } else {
-        // For organization-level team metrics
-        url = `https://api.github.com/orgs/${filter.organization}/team/${teamSlug}/copilot/metrics${queryString}`;
-        entityName = `${filter.organization}/team/${teamSlug}`;
+        reportUrl = `${baseUrl}/orgs/${filter.organization}/copilot/metrics/reports/organization-1-day?day=${day}`;
       }
 
-      return fetchCopilotMetrics(url, token, version, entityName);
+      return fetchMetricsReport(reportUrl, token, version, entityName);
     });
 
-    const teamMetricsResults = await Promise.all(teamMetricsPromises);
+    const batchResults = await Promise.all(batchPromises);
 
-    // Check if any requests failed
-    const failedResults = teamMetricsResults.filter(result => result.status !== "OK");
-    if (failedResults.length > 0) {
-      // Return the first error encountered
-      return failedResults[0];
+    for (const result of batchResults) {
+      if (result.status === "OK" && result.response.length > 0) {
+        allMetrics.push(...convertReportRecordsToLegacy(result.response));
+      }
     }
-
-    // Combine all successful results
-    const allMetrics: CopilotUsageOutput[] = [];
-    teamMetricsResults.forEach(result => {
-      if (result.status === "OK") {
-        allMetrics.push(...result.response);
-      }    });
-
-    // Sort by day to maintain consistency
-    allMetrics.sort((a, b) => new Date(a.day).getTime() - new Date(b.day).getTime());
-
-    return {
-      status: "OK",
-      response: allMetrics,
-    };
-  } catch (e) {
-    return unknownResponseError(e);
   }
-};
+
+  // Sort by date
+  allMetrics.sort(
+    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+  );
+
+  const dataWithTimeFrame = applyTimeFrameLabel(allMetrics);
+
+  return {
+    status: "OK",
+    response: dataWithTimeFrame,
+  };
+}
 
 export const getCopilotMetricsFromDatabase = async (
   filter: IFilter

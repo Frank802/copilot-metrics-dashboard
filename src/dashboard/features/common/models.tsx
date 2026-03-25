@@ -177,3 +177,130 @@ export interface CopilotUsage {
     copilot_dotcom_chat: CopilotDotcomChatMetrics;
     copilot_dotcom_pull_requests: CopilotDotcomPullRequestsMetrics;
   }
+
+  // ── New Copilot Usage Metrics API types (2026-03-10) ──
+
+  /** Response from the metrics reports endpoints (e.g. enterprise-28-day/latest) */
+  export interface MetricsReportResponse {
+    download_links: string[];
+    report_day?: string;
+    report_start_day?: string;
+    report_end_day?: string;
+  }
+
+  /** A single record inside a downloaded NDJSON report file (enterprise / org level) */
+  export interface MetricsReportRecord {
+    day_totals: DayTotal[];
+    enterprise_id?: string;
+    organization_id?: string;
+    report_start_day: string;
+    report_end_day: string;
+  }
+
+  /** Daily aggregate metrics within a report record */
+  export interface DayTotal {
+    day: string;
+    enterprise_id?: string;
+    organization_id?: string;
+    daily_active_users: number;
+    weekly_active_users: number;
+    monthly_active_users: number;
+    monthly_active_chat_users?: number;
+    monthly_active_agent_users?: number;
+    code_generation_activity_count: number;
+    code_acceptance_activity_count: number;
+    loc_suggested_to_add_sum: number;
+    loc_suggested_to_delete_sum: number;
+    loc_added_sum: number;
+    loc_deleted_sum: number;
+    user_initiated_interaction_count: number;
+    totals_by_ide: TotalsByIde[];
+    totals_by_feature: TotalsByFeature[];
+    totals_by_language_feature: TotalsByLanguageFeature[];
+    totals_by_model_feature: TotalsByModelFeature[];
+    totals_by_language_model: TotalsByLanguageModel[];
+    pull_requests?: PullRequestMetrics;
+    daily_active_cli_users?: number;
+    totals_by_cli?: TotalsByCli;
+  }
+
+  export interface TotalsByIde {
+    ide: string;
+    code_generation_activity_count: number;
+    code_acceptance_activity_count: number;
+    loc_suggested_to_add_sum: number;
+    loc_suggested_to_delete_sum: number;
+    loc_added_sum: number;
+    loc_deleted_sum: number;
+    user_initiated_interaction_count: number;
+    last_known_ide_version?: { ide_version: string; sampled_at: string };
+    last_known_plugin_version?: { plugin: string; plugin_version: string; sampled_at: string };
+  }
+
+  export interface TotalsByFeature {
+    feature: string;
+    code_generation_activity_count: number;
+    code_acceptance_activity_count: number;
+    loc_suggested_to_add_sum: number;
+    loc_suggested_to_delete_sum: number;
+    loc_added_sum: number;
+    loc_deleted_sum: number;
+    user_initiated_interaction_count: number;
+  }
+
+  export interface TotalsByLanguageFeature {
+    feature: string;
+    language: string;
+    code_generation_activity_count: number;
+    code_acceptance_activity_count: number;
+    loc_suggested_to_add_sum: number;
+    loc_suggested_to_delete_sum: number;
+    loc_added_sum: number;
+    loc_deleted_sum: number;
+  }
+
+  export interface TotalsByModelFeature {
+    model?: string;
+    feature?: string;
+    code_generation_activity_count?: number;
+    code_acceptance_activity_count?: number;
+    loc_suggested_to_add_sum?: number;
+    loc_added_sum?: number;
+    user_initiated_interaction_count?: number;
+  }
+
+  export interface TotalsByLanguageModel {
+    language?: string;
+    model?: string;
+    code_generation_activity_count?: number;
+    code_acceptance_activity_count?: number;
+    loc_suggested_to_add_sum?: number;
+    loc_added_sum?: number;
+  }
+
+  export interface PullRequestMetrics {
+    total_created: number;
+    total_reviewed: number;
+    total_merged: number;
+    median_minutes_to_merge?: number;
+    total_suggestions: number;
+    total_applied_suggestions: number;
+    total_created_by_copilot: number;
+    total_reviewed_by_copilot: number;
+    total_merged_created_by_copilot: number;
+    median_minutes_to_merge_copilot_authored?: number;
+    total_copilot_suggestions: number;
+    total_copilot_applied_suggestions: number;
+  }
+
+  export interface TotalsByCli {
+    session_count: number;
+    request_count: number;
+    prompt_count: number;
+    token_usage: {
+      output_tokens_sum: number;
+      prompt_tokens_sum: number;
+      avg_tokens_per_request: number;
+    };
+    last_known_cli_version?: { cli_version: string; sampled_at: string };
+  }
